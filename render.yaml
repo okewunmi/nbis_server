@@ -1,0 +1,51 @@
+# render.yaml - Place in project root
+services:
+  - type: web
+    name: nbis-fingerprint-matcher
+    env: python
+    region: oregon
+    plan: starter
+    buildCommand: |
+      apt-get update
+      apt-get install -y nbis
+      pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+    healthCheckPath: /health
+
+---
+# requirements.txt
+flask==3.0.0
+flask-cors==4.0.0
+Pillow==10.1.0
+numpy==1.24.3
+gunicorn==21.2.0
+
+---
+# .slugignore (optional - reduces slug size)
+*.md
+*.txt
+.git
+.gitignore
+tests/
+
+---
+# Dockerfile (alternative to buildCommand if needed)
+FROM python:3.11-slim
+
+# Install NBIS
+RUN apt-get update && \
+    apt-get install -y nbis && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:$PORT", "--workers", "2", "--timeout", "120"]
