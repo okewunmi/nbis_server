@@ -1,16 +1,6 @@
 """
 NIST NBIS Fingerprint Matching Server
 Deploy this on Render.com as a Web Service
-
-Requirements (requirements.txt):
-flask==3.0.0
-flask-cors==4.0.0
-Pillow==10.1.0
-numpy==1.24.3
-gunicorn==21.2.0
-
-System packages needed (in Render dashboard):
-- nbis (NIST Biometric Image Software)
 """
 
 from flask import Flask, request, jsonify
@@ -23,22 +13,90 @@ import json
 from PIL import Image
 import numpy as np
 from pathlib import Path
+import shutil
+import sys
 
 app = Flask(__name__)
 CORS(app)
 
-# NBIS executables paths - try multiple locations
-import shutil
+# NBIS executables paths - comprehensive search
+def find_nbis_tools():
+    """Find NBIS tools in various possible locations"""
+    possible_paths = [
+        "/opt/nbis/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/opt/bin",
+        "/app/nbis/bin"
+    ]
+    
+    mindtct = shutil.which("mindtct")
+    bozorth3 = shutil.which("bozorth3")
+    cwsq = shutil.which("cwsq")
+    
+    # If not found in PATH, search in possible directories
+    if not mindtct:
+        for path in possible_paths:
+            test_path = os.path.join(path, "mindtct")
+            if os.path.exists(test_path) and os.access(test_path, os.X_OK):
+                mindtct = test_path
+                break
+    
+    if not bozorth3:
+        for path in possible_paths:
+            test_path = os.path.join(path, "bozorth3")
+            if os.path.exists(test_path) and os.access(test_path, os.X_OK):
+                bozorth3 = test_path
+                break
+    
+    if not cwsq:
+        for path in possible_paths:
+            test_path = os.path.join(path, "cwsq")
+            if os.path.exists(test_path) and os.access(test_path, os.X_OK):
+                cwsq = test_path
+                break
+    
+    return mindtct, bozorth3, cwsq
 
-# Try to find NBIS tools in PATH
-MINDTCT = shutil.which("mindtct") or "/opt/nbis/bin/mindtct" or "/usr/local/bin/mindtct" or "/usr/bin/mindtct"
-BOZORTH3 = shutil.which("bozorth3") or "/opt/nbis/bin/bozorth3" or "/usr/local/bin/bozorth3" or "/usr/bin/bozorth3"
+MINDTCT, BOZORTH3, CWSQ = find_nbis_tools()
 
-print(f"🔍 NBIS Tool Locations:")
-print(f"   MINDTCT: {MINDTCT}")
-print(f"   BOZORTH3: {BOZORTH3}")
-print(f"   MINDTCT exists: {os.path.exists(MINDTCT) if MINDTCT else False}")
-print(f"   BOZORTH3 exists: {os.path.exists(BOZORTH3) if BOZORTH3 else False}")
+print("=" * 60)
+print("🔍 NBIS Tool Detection Report")
+print("=" * 60)
+print(f"Python Version: {sys.version}")
+print(f"Working Directory: {os.getcwd()}")
+print(f"PATH: {os.environ.get('PATH', 'Not set')}")
+print("-" * 60)
+print(f"MINDTCT Path: {MINDTCT}")
+print(f"MINDTCT Exists: {os.path.exists(MINDTCT) if MINDTCT else False}")
+print(f"MINDTCT Executable: {os.access(MINDTCT, os.X_OK) if MINDTCT and os.path.exists(MINDTCT) else False}")
+print("-" * 60)
+print(f"BOZORTH3 Path: {BOZORTH3}")
+print(f"BOZORTH3 Exists: {os.path.exists(BOZORTH3) if BOZORTH3 else False}")
+print(f"BOZORTH3 Executable: {os.access(BOZORTH3, os.X_OK) if BOZORTH3 and os.path.exists(BOZORTH3) else False}")
+print("-" * 60)
+print(f"CWSQ Path: {CWSQ}")
+print(f"CWSQ Exists: {os.path.exists(CWSQ) if CWSQ else False}")
+print(f"CWSQ Executable: {os.access(CWSQ, os.X_OK) if CWSQ and os.path.exists(CWSQ) else False}")
+print("=" * 60)
+
+# Test NBIS tools
+if MINDTCT and os.path.exists(MINDTCT):
+    try:
+        result = subprocess.run([MINDTCT, "-version"], capture_output=True, text=True, timeout=5)
+        print(f"✅ MINDTCT Test: Success")
+        print(f"   Output: {result.stderr[:100] if result.stderr else result.stdout[:100]}")
+    except Exception as e:
+        print(f"❌ MINDTCT Test Failed: {e}")
+
+if BOZORTH3 and os.path.exists(BOZORTH3):
+    try:
+        result = subprocess.run([BOZORTH3], capture_output=True, text=True, timeout=5)
+        print(f"✅ BOZORTH3 Test: Success")
+    except Exception as e:
+        print(f"❌ BOZORTH3 Test Failed: {e}")
+
+print("=" * 60)
 
 class NBISMatcher:
     """NIST NBIS-based fingerprint matcher"""
@@ -46,6 +104,15 @@ class NBISMatcher:
     def __init__(self):
         self.temp_dir = Path(tempfile.gettempdir()) / "nbis_fingerprints"
         self.temp_dir.mkdir(exist_ok=True)
+        print(f"📁 Temp directory: {self.temp_dir}")
+        
+        # Verify NBIS tools are available
+        if not MINDTCT or not os.path.exists(MINDTCT):
+            raise RuntimeError("MINDTCT not found. NBIS not properly installed.")
+        if not BOZORTH3 or not os.path.exists(BOZORTH3):
+            raise RuntimeError("BOZORTH3 not found. NBIS not properly installed.")
+        if not CWSQ or not os.path.exists(CWSQ):
+            raise RuntimeError("CWSQ not found. NBIS not properly installed.")
         
     def extract_minutiae(self, base64_image, file_id):
         """
@@ -66,11 +133,7 @@ class NBISMatcher:
                 f.write(image_data)
             
             # Convert PNG to WSQ (NBIS standard format)
-            # WSQ is the FBI standard for fingerprint compression
             img = Image.open(png_file).convert('L')  # Convert to grayscale
-            
-            # Resize if needed (NBIS works best with 500 DPI images)
-            # DigitalPersona 4500 outputs at 500 DPI, so should be fine
             img_array = np.array(img)
             
             # Save as raw grayscale for NBIS
@@ -78,19 +141,19 @@ class NBISMatcher:
             img_array.tofile(raw_file)
             
             # Convert to WSQ using cwsq (NBIS tool)
-            subprocess.run([
-                "cwsq", "2.25", "wsq",
+            cwsq_result = subprocess.run([
+                CWSQ, "2.25", "wsq",
                 str(wsq_file),
                 "-raw_in", str(raw_file),
                 str(img.width), str(img.height), "8", "500"
-            ], check=True, capture_output=True)
+            ], check=True, capture_output=True, text=True, timeout=30)
             
             # Extract minutiae using MINDTCT
-            result = subprocess.run([
+            mindtct_result = subprocess.run([
                 MINDTCT,
                 str(wsq_file),
                 str(self.temp_dir / file_id)
-            ], check=True, capture_output=True, text=True)
+            ], check=True, capture_output=True, text=True, timeout=30)
             
             # Check if .xyt file was created
             if not xyt_file.exists():
@@ -128,7 +191,7 @@ class NBISMatcher:
                 BOZORTH3,
                 str(xyt_file1),
                 str(xyt_file2)
-            ], check=True, capture_output=True, text=True)
+            ], check=True, capture_output=True, text=True, timeout=30)
             
             # Parse match score
             score = int(result.stdout.strip())
@@ -151,34 +214,48 @@ class NBISMatcher:
             file = self.temp_dir / f"{file_id}{pattern}"
             file.unlink(missing_ok=True)
 
-matcher = NBISMatcher()
+# Initialize matcher (will fail if NBIS not available)
+try:
+    matcher = NBISMatcher()
+    NBIS_AVAILABLE = True
+    print("✅ NBISMatcher initialized successfully")
+except Exception as e:
+    matcher = None
+    NBIS_AVAILABLE = False
+    print(f"❌ NBISMatcher initialization failed: {e}")
 
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
     mindtct_exists = MINDTCT and os.path.exists(MINDTCT)
     bozorth3_exists = BOZORTH3 and os.path.exists(BOZORTH3)
-    nbis_available = mindtct_exists and bozorth3_exists
+    cwsq_exists = CWSQ and os.path.exists(CWSQ)
+    nbis_available = mindtct_exists and bozorth3_exists and cwsq_exists
     
     return jsonify({
         'status': 'healthy',
         'service': 'NIST NBIS Fingerprint Matcher',
         'nbis_available': nbis_available,
+        'matcher_initialized': NBIS_AVAILABLE,
         'nbis_details': {
             'mindtct_path': MINDTCT,
             'mindtct_exists': mindtct_exists,
+            'mindtct_executable': os.access(MINDTCT, os.X_OK) if MINDTCT and mindtct_exists else False,
             'bozorth3_path': BOZORTH3,
-            'bozorth3_exists': bozorth3_exists
+            'bozorth3_exists': bozorth3_exists,
+            'bozorth3_executable': os.access(BOZORTH3, os.X_OK) if BOZORTH3 and bozorth3_exists else False,
+            'cwsq_path': CWSQ,
+            'cwsq_exists': cwsq_exists,
+            'cwsq_executable': os.access(CWSQ, os.X_OK) if CWSQ and cwsq_exists else False
         }
     })
 
 @app.route('/extract', methods=['POST'])
 def extract_minutiae():
-    """
-    Extract minutiae from a single fingerprint
-    Request: { "image": "base64_string", "id": "unique_id" }
-    Response: { "success": true, "minutiae_count": 45, "xyt_data": "..." }
-    """
+    """Extract minutiae from a single fingerprint"""
+    if not NBIS_AVAILABLE:
+        return jsonify({'success': False, 'error': 'NBIS tools not available'}), 503
+    
     try:
         data = request.json
         
@@ -210,11 +287,10 @@ def extract_minutiae():
 
 @app.route('/compare', methods=['POST'])
 def compare_fingerprints():
-    """
-    Compare two fingerprints
-    Request: { "image1": "base64", "image2": "base64" }
-    Response: { "success": true, "matched": true, "score": 145, "confidence": 95 }
-    """
+    """Compare two fingerprints"""
+    if not NBIS_AVAILABLE:
+        return jsonify({'success': False, 'error': 'NBIS tools not available'}), 503
+    
     try:
         data = request.json
         
@@ -237,15 +313,9 @@ def compare_fingerprints():
         print("🔄 Running BOZORTH3 matching...")
         score = matcher.match_fingerprints(xyt_file1, xyt_file2)
         
-        # BOZORTH3 scoring:
-        # 0-39: No match
-        # 40-99: Possible match (low confidence)
-        # 100-199: Good match (medium confidence)
-        # 200+: Excellent match (high confidence)
-        
-        # CRITICAL THRESHOLDS (based on NIST standards)
-        MATCH_THRESHOLD = 40  # Minimum for match
-        HIGH_CONFIDENCE_THRESHOLD = 100  # High confidence match
+        # BOZORTH3 scoring thresholds
+        MATCH_THRESHOLD = 40
+        HIGH_CONFIDENCE_THRESHOLD = 100
         
         matched = score >= MATCH_THRESHOLD
         
@@ -289,11 +359,10 @@ def compare_fingerprints():
 
 @app.route('/batch-compare', methods=['POST'])
 def batch_compare():
-    """
-    Compare one fingerprint against multiple stored fingerprints
-    Request: { "query_image": "base64", "database": [{"id": "123", "image": "base64"}, ...] }
-    Response: { "success": true, "matches": [...], "best_match": {...} }
-    """
+    """Compare one fingerprint against multiple stored fingerprints"""
+    if not NBIS_AVAILABLE:
+        return jsonify({'success': False, 'error': 'NBIS tools not available'}), 503
+    
     try:
         data = request.json
         
