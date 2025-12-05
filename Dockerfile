@@ -28,25 +28,19 @@ RUN wget https://github.com/lessandro/nbis/tarball/master -O nbis.tar.gz && \
     mv lessandro-nbis-* nbis && \
     ls -la nbis/
 
-# Build NBIS using their standard build process
+# Build NBIS - setup.sh configures the build, then we build from source directory
 WORKDIR /tmp/nbis
-
-# Create installation directory BEFORE running setup.sh
 RUN mkdir -p /usr/local/nbis && \
-    export NBIS_INSTALL_DIR=/usr/local/nbis && \
     chmod +x setup.sh && \
-    ./setup.sh /usr/local/nbis && \
-    cd /usr/local/nbis && \
-    make config && \
-    make it && \
-    make install && \
-    make catalog
+    ./setup.sh /usr/local/nbis --without-X11 && \
+    make && \
+    make install
 
-# Verify binaries were built
+# Verify binaries were built and installed
 RUN ls -la /usr/local/nbis/bin/ && \
-    test -f /usr/local/nbis/bin/mindtct && echo "✅ mindtct built" || (echo "❌ mindtct FAILED" && exit 1) && \
-    test -f /usr/local/nbis/bin/bozorth3 && echo "✅ bozorth3 built" || (echo "❌ bozorth3 FAILED" && exit 1) && \
-    test -f /usr/local/nbis/bin/cwsq && echo "✅ cwsq built" || (echo "❌ cwsq FAILED" && exit 1)
+    test -f /usr/local/nbis/bin/mindtct && echo "✅ mindtct built" || (echo "❌ mindtct FAILED" && find /usr/local/nbis -name mindtct && exit 1) && \
+    test -f /usr/local/nbis/bin/bozorth3 && echo "✅ bozorth3 built" || (echo "❌ bozorth3 FAILED" && find /usr/local/nbis -name bozorth3 && exit 1) && \
+    test -f /usr/local/nbis/bin/cwsq && echo "✅ cwsq built" || (echo "❌ cwsq FAILED" && find /usr/local/nbis -name cwsq && exit 1)
 
 # ============================================
 # Stage 2: Runtime image
