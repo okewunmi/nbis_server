@@ -8,8 +8,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install build dependencies
 RUN apt-get update && \
     apt-get install -y \
-    git \
     wget \
+    ca-certificates \
     build-essential \
     gcc \
     g++ \
@@ -21,15 +21,17 @@ RUN apt-get update && \
     zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone NBIS from working mirror (lessandro's mirror is reliable)
+# Download NBIS from working GitHub mirror (using tarball instead of zip)
 WORKDIR /tmp
-RUN git clone --depth 1 https://github.com/lessandro/nbis.git && \
-    cd nbis && \
-    ls -la
+RUN wget https://github.com/lessandro/nbis/tarball/master -O nbis.tar.gz && \
+    tar -xzf nbis.tar.gz && \
+    mv lessandro-nbis-* nbis && \
+    ls -la nbis/
 
 # Build NBIS using their standard build process
 WORKDIR /tmp/nbis
 RUN export NBIS_INSTALL_DIR=/usr/local/nbis && \
+    chmod +x setup.sh && \
     ./setup.sh /usr/local/nbis && \
     cd /usr/local/nbis && \
     make config && \
