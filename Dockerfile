@@ -1,15 +1,15 @@
-# Use Python 3.11 slim image
-FROM python:3.11-slim-bullseye
+# ============================================
+# Stage 1: Build NBIS
+# ============================================
+FROM debian:bullseye as nbis-builder
 
-# Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies for NBIS compilation
+# Install build dependencies
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+    apt-get install -y \
     wget \
-    ca-certificates \
+    unzip \
     build-essential \
     gcc \
     g++ \
@@ -20,47 +20,80 @@ RUN apt-get update && \
     zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Download and compile NBIS from source
+# Download and build NBIS
 WORKDIR /tmp
-RUN wget -q https://github.com/usnistgov/NBIS/archive/refs/heads/master.zip -O nbis.zip && \
-    apt-get update && apt-get install -y unzip && \
-    unzip -q nbis.zip && \
+RUN wget https://github.com/usnistgov/NBIS/archive/refs/heads/master.zip -O nbis.zip && \
+    unzip nbis.zip && \
     cd NBIS-master && \
-    ./setup.sh /opt/nbis --without-X11 && \
-    cd /opt/nbis && \
-    export NBIS_INSTALL_DIR=/opt/nbis && \
-    export PATH=$NBIS_INSTALL_DIR/bin:$PATH && \
-    cd /tmp && rm -rf NBIS-master nbis.zip && \
-    apt-get remove -y unzip && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
+    ./setup.sh /usr/local/nbis && \
+    cd /usr/local/nbis && \
+    make config && \
+    make it && \
+    make install && \
+    make catalog
 
-# Add NBIS binaries to PATH
-ENV PATH="/opt/nbis/bin:${PATH}"
+# Verify binaries were built
+RUN ls -la /usr/local/nbis/bin/ && \
+    test -f /usr/local/nbis/bin/mindtct || (echo "mindtct not found" && exit 1) && \
+    test -f /usr/local/nbis/bin/bozorth3 || (echo "bozorth3 not found" && exit 1) && \
+    test -f /usr/local/nbis/bin/cwsq || (echo "cwsq not found" && exit 1)
 
-# Verify NBIS tools are accessible
-RUN mindtct || echo "mindtct installed" && \
-    bozorth3 || echo "bozorth3 installed"
+# ============================================
+# Stage 2: Runtime image
+# ============================================
+FROM python:3.11-slim-bullseye
 
-# Set up application directory
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PATH="/usr/local/nbis/bin:${PATH}"
+
+# Install runtime dependencies only
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    libpng16-16 \
+    libjpeg62-turbo \
+    libtiff5 \
+    zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy NBIS binaries and libraries from builder
+COPY --from=nbis-builder /usr/local/nbis /usr/local/nbis
+
+# Verify NBIS tools are present
+RUN ls -la /usr/local/nbis/bin/ && \
+    test -f /usr/local/nbis/bin/mindtct && echo "✅ mindtct copied" || exit 1 && \
+    test -f /usr/local/nbis/bin/bozorth3 && echo "✅ bozorth3 copied" || exit 1 && \
+    test -f /usr/local/nbis/bin/cwsq && echo "✅ cwsq copied" || exit 1
+
+# Make all binaries executable
+RUN chmod +x /usr/local/nbis/bin/*
+
+# Test NBIS tools
+RUN /usr/local/nbis/bin/mindtct 2>&1 | head -n 1 || true && \
+    /usr/local/nbis/bin/bozorth3 2>&1 | head -n 1 || true && \
+    echo "✅ NBIS tools verified"
+
+# Set up application
 WORKDIR /app
 
-# Copy and install Python dependencies
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application
 COPY app.py .
 
-# Expose port (Render provides PORT env var)
+# Create temp directory
+RUN mkdir -p /tmp/nbis_fingerprints && chmod 777 /tmp/nbis_fingerprints
+
 EXPOSE 10000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD python3 -c "import requests; requests.get('http://localhost:10000/health')" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:10000/health', timeout=5)" || exit 1
 
-# Run application with gunicorn
+# Run application
 CMD gunicorn app:app \
     --bind 0.0.0.0:${PORT:-10000} \
     --workers 2 \
