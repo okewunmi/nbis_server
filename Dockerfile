@@ -21,7 +21,7 @@ RUN apt-get update && \
     zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Download NBIS from working GitHub mirror (using tarball instead of zip)
+# Download and build NBIS
 WORKDIR /tmp
 RUN wget https://github.com/lessandro/nbis/tarball/master -O nbis.tar.gz && \
     tar -xzf nbis.tar.gz && \
@@ -30,7 +30,10 @@ RUN wget https://github.com/lessandro/nbis/tarball/master -O nbis.tar.gz && \
 
 # Build NBIS using their standard build process
 WORKDIR /tmp/nbis
-RUN export NBIS_INSTALL_DIR=/usr/local/nbis && \
+
+# Create installation directory BEFORE running setup.sh
+RUN mkdir -p /usr/local/nbis && \
+    export NBIS_INSTALL_DIR=/usr/local/nbis && \
     chmod +x setup.sh && \
     ./setup.sh /usr/local/nbis && \
     cd /usr/local/nbis && \
@@ -76,10 +79,9 @@ RUN ls -la /usr/local/nbis/bin/ && \
 RUN chmod +x /usr/local/nbis/bin/*
 
 # Test NBIS tools
-RUN echo "Testing NBIS tools..." && \
-    /usr/local/nbis/bin/mindtct 2>&1 | head -n 1 || true && \
+RUN /usr/local/nbis/bin/mindtct 2>&1 | head -n 1 || true && \
     /usr/local/nbis/bin/bozorth3 2>&1 | head -n 1 || true && \
-    echo "✅ NBIS tools verified and executable"
+    echo "✅ NBIS tools verified"
 
 # Set up application
 WORKDIR /app
