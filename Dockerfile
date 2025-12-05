@@ -8,23 +8,28 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install build dependencies
 RUN apt-get update && \
     apt-get install -y \
+    git \
     wget \
-    unzip \
     build-essential \
     gcc \
     g++ \
     make \
+    cmake \
     libpng-dev \
     libjpeg-dev \
     libtiff-dev \
     zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Download and build NBIS
+# Clone NBIS from working mirror (lessandro's mirror is reliable)
 WORKDIR /tmp
-RUN wget https://github.com/usnistgov/NBIS/archive/refs/heads/master.zip -O nbis.zip && \
-    unzip nbis.zip && \
-    cd NBIS-master && \
+RUN git clone --depth 1 https://github.com/lessandro/nbis.git && \
+    cd nbis && \
+    ls -la
+
+# Build NBIS using their standard build process
+WORKDIR /tmp/nbis
+RUN export NBIS_INSTALL_DIR=/usr/local/nbis && \
     ./setup.sh /usr/local/nbis && \
     cd /usr/local/nbis && \
     make config && \
@@ -34,9 +39,9 @@ RUN wget https://github.com/usnistgov/NBIS/archive/refs/heads/master.zip -O nbis
 
 # Verify binaries were built
 RUN ls -la /usr/local/nbis/bin/ && \
-    test -f /usr/local/nbis/bin/mindtct || (echo "mindtct not found" && exit 1) && \
-    test -f /usr/local/nbis/bin/bozorth3 || (echo "bozorth3 not found" && exit 1) && \
-    test -f /usr/local/nbis/bin/cwsq || (echo "cwsq not found" && exit 1)
+    test -f /usr/local/nbis/bin/mindtct && echo "✅ mindtct built" || (echo "❌ mindtct FAILED" && exit 1) && \
+    test -f /usr/local/nbis/bin/bozorth3 && echo "✅ bozorth3 built" || (echo "❌ bozorth3 FAILED" && exit 1) && \
+    test -f /usr/local/nbis/bin/cwsq && echo "✅ cwsq built" || (echo "❌ cwsq FAILED" && exit 1)
 
 # ============================================
 # Stage 2: Runtime image
@@ -69,9 +74,10 @@ RUN ls -la /usr/local/nbis/bin/ && \
 RUN chmod +x /usr/local/nbis/bin/*
 
 # Test NBIS tools
-RUN /usr/local/nbis/bin/mindtct 2>&1 | head -n 1 || true && \
+RUN echo "Testing NBIS tools..." && \
+    /usr/local/nbis/bin/mindtct 2>&1 | head -n 1 || true && \
     /usr/local/nbis/bin/bozorth3 2>&1 | head -n 1 || true && \
-    echo "✅ NBIS tools verified"
+    echo "✅ NBIS tools verified and executable"
 
 # Set up application
 WORKDIR /app
