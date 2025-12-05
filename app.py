@@ -1,6 +1,6 @@
 """
 NIST NBIS Fingerprint Matching Server - FIXED VERSION
-The CWSQ command now uses correct parameter order
+CWSQ output naming fixed - it creates <basename>.<outext>
 """
 
 from flask import Flask, request, jsonify
@@ -83,15 +83,20 @@ class NBISMatcher:
     def extract_minutiae(self, base64_image, file_id):
         """
         Extract minutiae from fingerprint image using MINDTCT
-        Returns: Path to .xyt minutiae file
+        Returns: Path to .xyt minutiae file and minutiae count
         """
         try:
             # Decode base64 to image
             image_data = base64.b64decode(base64_image)
             
-            # Create temporary files
+            # Create temporary files with proper naming
             png_file = self.temp_dir / f"{file_id}.png"
             raw_file = self.temp_dir / f"{file_id}.raw"
+            # CWSQ creates <basename>.<outext>, so if we pass "file_id" as input,
+            # it will create "file_id.wsq" in the current working directory
+            # We need to use full path without extension
+            base_name = self.temp_dir / file_id
+            wsq_file = self.temp_dir / f"{file_id}.wsq"
             xyt_file = self.temp_dir / f"{file_id}.xyt"
             
             # Save PNG
@@ -106,14 +111,14 @@ class NBISMatcher:
             # Save as raw grayscale
             img_array.tofile(raw_file)
             
-            # ⭐ FIXED: Correct CWSQ command format
-            # Usage: cwsq <bitrate> <outext> <INPUT_IMAGE> -raw_in <w>,<h>,<d>,[ppi]
-            # The INPUT_IMAGE is the raw file, and cwsq will create INPUT_IMAGE.wsq
+            # ⭐ FIXED: CWSQ creates <input_basename>.<outext>
+            # So: cwsq 2.25 wsq /path/to/file.raw creates /path/to/file.wsq
+            # The output extension replaces the input extension
             cwsq_command = [
                 CWSQ,
                 "2.25",           # Bitrate (5:1 compression ratio)
-                "wsq",            # Output extension (will append .wsq to input filename)
-                str(raw_file),    # ✅ INPUT file (raw image data)
+                "wsq",            # Output extension (replaces .raw with .wsq)
+                str(raw_file),    # Input file path
                 "-raw_in",        # Flag indicating raw input format
                 f"{width},{height},8,500"  # width,height,depth,ppi
             ]
@@ -124,28 +129,46 @@ class NBISMatcher:
                 cwsq_command,
                 capture_output=True,
                 text=True,
-                timeout=30,
-                check=True
+                timeout=30
             )
             
-            # CWSQ creates output file by appending .wsq to input filename
-            wsq_output = Path(str(raw_file) + ".wsq")
+            if cwsq_result.returncode != 0:
+                print(f"❌ CWSQ stderr: {cwsq_result.stderr}")
+                print(f"❌ CWSQ stdout: {cwsq_result.stdout}")
+                raise Exception(f"CWSQ failed: {cwsq_result.stderr}")
             
-            if not wsq_output.exists():
-                raise Exception(f"WSQ file not created at {wsq_output}")
+            # CWSQ replaces the extension: file.raw -> file.wsq
+            # So the output should be at the same path with .wsq extension
+            if not wsq_file.exists():
+                # Check if it was created in current directory
+                alt_wsq = Path(f"{file_id}.wsq")
+                if alt_wsq.exists():
+                    shutil.move(str(alt_wsq), str(wsq_file))
+                else:
+                    print(f"❌ WSQ file not found at: {wsq_file}")
+                    print(f"❌ Also checked: {alt_wsq}")
+                    print(f"📂 Directory contents: {list(self.temp_dir.glob('*'))}")
+                    raise Exception(f"WSQ file not created")
             
-            print(f"✅ CWSQ completed, created: {wsq_output}")
+            print(f"✅ CWSQ completed, created: {wsq_file}")
             
             # Extract minutiae using MINDTCT
             print(f"🔧 Running MINDTCT...")
             mindtct_result = subprocess.run([
                 MINDTCT,
-                str(wsq_output),
-                str(self.temp_dir / file_id)  # Output prefix (will create file_id.xyt)
-            ], check=True, capture_output=True, text=True, timeout=30)
+                str(wsq_file),
+                str(base_name)  # Output prefix (will create file_id.xyt)
+            ], capture_output=True, text=True, timeout=30)
+            
+            if mindtct_result.returncode != 0:
+                print(f"❌ MINDTCT stderr: {mindtct_result.stderr}")
+                print(f"❌ MINDTCT stdout: {mindtct_result.stdout}")
+                raise Exception(f"MINDTCT failed: {mindtct_result.stderr}")
             
             # Check if .xyt file was created
             if not xyt_file.exists():
+                print(f"❌ XYT file not found at: {xyt_file}")
+                print(f"📂 Directory contents: {list(self.temp_dir.glob('*'))}")
                 raise Exception("Minutiae extraction failed - no .xyt file generated")
             
             # Read minutiae count
@@ -158,7 +181,7 @@ class NBISMatcher:
             # Cleanup temporary files
             png_file.unlink(missing_ok=True)
             raw_file.unlink(missing_ok=True)
-            wsq_output.unlink(missing_ok=True)
+            wsq_file.unlink(missing_ok=True)
             
             return str(xyt_file), minutiae_count
             
