@@ -19,22 +19,28 @@ RUN apt-get update && \
     libjpeg-dev \
     libtiff-dev \
     zlib1g-dev \
+    sed \
     && rm -rf /var/lib/apt/lists/*
 
-# Download and build NBIS
+# Download and extract NBIS
 WORKDIR /tmp
 RUN wget https://github.com/lessandro/nbis/tarball/master -O nbis.tar.gz && \
     tar -xzf nbis.tar.gz && \
     mv lessandro-nbis-* nbis && \
     ls -la nbis/
 
-# Build NBIS - setup.sh configures the build, then we build from source directory
+# Fix the multiple definition error by adding compiler flag
 WORKDIR /tmp/nbis
 RUN mkdir -p /usr/local/nbis && \
     chmod +x setup.sh && \
-    ./setup.sh /usr/local/nbis --without-X11 && \
-    make && \
-    make install
+    ./setup.sh /usr/local/nbis --without-X11
+
+# Patch the build to add -fcommon flag for GCC 10+
+RUN find . -name "*.mak" -type f -exec sed -i 's/-fPIC/-fPIC -fcommon/g' {} \; && \
+    find . -name "Rules.mak" -type f -exec sed -i 's/-fPIC/-fPIC -fcommon/g' {} \;
+
+# Build and install
+RUN make && make install
 
 # Verify binaries were built and installed
 RUN ls -la /usr/local/nbis/bin/ && \
