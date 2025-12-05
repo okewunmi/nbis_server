@@ -1,12 +1,13 @@
+# render.yaml - CRITICAL: Must be at project root
 services:
   - type: web
     name: nbis-fingerprint-matcher
-    env: docker  # CRITICAL: This tells Render to use Dockerfile
+    runtime: docker  # CRITICAL: Use 'runtime: docker' NOT 'env: docker'
     region: oregon
     plan: starter
-    dockerfilePath: ./Dockerfile  # Explicitly specify Dockerfile path
-    dockerContext: .
     healthCheckPath: /health
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     envVars:
       - key: PORT
         value: 10000
