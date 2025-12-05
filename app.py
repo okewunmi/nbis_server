@@ -1,6 +1,6 @@
 """
 NIST NBIS Fingerprint Matching Server - FIXED VERSION
-The CWSQ command was using wrong parameter order
+The CWSQ command now uses correct parameter order
 """
 
 from flask import Flask, request, jsonify
@@ -91,9 +91,8 @@ class NBISMatcher:
             
             # Create temporary files
             png_file = self.temp_dir / f"{file_id}.png"
-            wsq_file = self.temp_dir / f"{file_id}.wsq"
-            xyt_file = self.temp_dir / f"{file_id}.xyt"
             raw_file = self.temp_dir / f"{file_id}.raw"
+            xyt_file = self.temp_dir / f"{file_id}.xyt"
             
             # Save PNG
             with open(png_file, 'wb') as f:
@@ -107,14 +106,15 @@ class NBISMatcher:
             # Save as raw grayscale
             img_array.tofile(raw_file)
             
-            # ⭐ FIX: Correct CWSQ command format
-            # Usage: cwsq <bitrate> <outext> <image> -raw_in <w>,<h>,<d>,[ppi]
+            # ⭐ FIXED: Correct CWSQ command format
+            # Usage: cwsq <bitrate> <outext> <INPUT_IMAGE> -raw_in <w>,<h>,<d>,[ppi]
+            # The INPUT_IMAGE is the raw file, and cwsq will create INPUT_IMAGE.wsq
             cwsq_command = [
                 CWSQ,
-                "2.25",           # Bitrate (5:1 compression)
-                "wsq",            # Output extension
-                str(wsq_file),    # Output file path
-                "-raw_in",        # Raw input flag
+                "2.25",           # Bitrate (5:1 compression ratio)
+                "wsq",            # Output extension (will append .wsq to input filename)
+                str(raw_file),    # ✅ INPUT file (raw image data)
+                "-raw_in",        # Flag indicating raw input format
                 f"{width},{height},8,500"  # width,height,depth,ppi
             ]
             
@@ -122,20 +122,26 @@ class NBISMatcher:
             
             cwsq_result = subprocess.run(
                 cwsq_command,
-                stdin=open(raw_file, 'rb'),  # Provide raw data as stdin
                 capture_output=True,
                 text=True,
                 timeout=30,
                 check=True
             )
             
-            print(f"✅ CWSQ completed")
+            # CWSQ creates output file by appending .wsq to input filename
+            wsq_output = Path(str(raw_file) + ".wsq")
+            
+            if not wsq_output.exists():
+                raise Exception(f"WSQ file not created at {wsq_output}")
+            
+            print(f"✅ CWSQ completed, created: {wsq_output}")
             
             # Extract minutiae using MINDTCT
+            print(f"🔧 Running MINDTCT...")
             mindtct_result = subprocess.run([
                 MINDTCT,
-                str(wsq_file),
-                str(self.temp_dir / file_id)
+                str(wsq_output),
+                str(self.temp_dir / file_id)  # Output prefix (will create file_id.xyt)
             ], check=True, capture_output=True, text=True, timeout=30)
             
             # Check if .xyt file was created
@@ -152,7 +158,7 @@ class NBISMatcher:
             # Cleanup temporary files
             png_file.unlink(missing_ok=True)
             raw_file.unlink(missing_ok=True)
-            wsq_file.unlink(missing_ok=True)
+            wsq_output.unlink(missing_ok=True)
             
             return str(xyt_file), minutiae_count
             
@@ -353,7 +359,7 @@ def batch_compare():
             
             xyt_db, count_db = matcher.extract_minutiae(db_entry['image'], f'db_{i}')
             
-            score = matcher.match_fingerprints(xyt_query, f"{matcher.temp_dir}/db_{i}.xyt")
+            score = matcher.match_fingerprints(xyt_query, xyt_db)
             
             matched = score >= 40
             if score >= 100:
