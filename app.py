@@ -27,9 +27,18 @@ from pathlib import Path
 app = Flask(__name__)
 CORS(app)
 
-# NBIS executables paths
-MINDTCT = "/usr/bin/mindtct"  # Minutiae detection
-BOZORTH3 = "/usr/bin/bozorth3"  # Minutiae matching
+# NBIS executables paths - try multiple locations
+import shutil
+
+# Try to find NBIS tools in PATH
+MINDTCT = shutil.which("mindtct") or "/opt/nbis/bin/mindtct" or "/usr/local/bin/mindtct" or "/usr/bin/mindtct"
+BOZORTH3 = shutil.which("bozorth3") or "/opt/nbis/bin/bozorth3" or "/usr/local/bin/bozorth3" or "/usr/bin/bozorth3"
+
+print(f"🔍 NBIS Tool Locations:")
+print(f"   MINDTCT: {MINDTCT}")
+print(f"   BOZORTH3: {BOZORTH3}")
+print(f"   MINDTCT exists: {os.path.exists(MINDTCT) if MINDTCT else False}")
+print(f"   BOZORTH3 exists: {os.path.exists(BOZORTH3) if BOZORTH3 else False}")
 
 class NBISMatcher:
     """NIST NBIS-based fingerprint matcher"""
@@ -147,10 +156,20 @@ matcher = NBISMatcher()
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
+    mindtct_exists = MINDTCT and os.path.exists(MINDTCT)
+    bozorth3_exists = BOZORTH3 and os.path.exists(BOZORTH3)
+    nbis_available = mindtct_exists and bozorth3_exists
+    
     return jsonify({
         'status': 'healthy',
         'service': 'NIST NBIS Fingerprint Matcher',
-        'nbis_available': os.path.exists(MINDTCT) and os.path.exists(BOZORTH3)
+        'nbis_available': nbis_available,
+        'nbis_details': {
+            'mindtct_path': MINDTCT,
+            'mindtct_exists': mindtct_exists,
+            'bozorth3_path': BOZORTH3,
+            'bozorth3_exists': bozorth3_exists
+        }
     })
 
 @app.route('/extract', methods=['POST'])
