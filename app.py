@@ -1,6 +1,13 @@
+
+
 # """
-# NIST NBIS Fingerprint Matching Server - FIXED VERSION
-# CWSQ output naming fixed - it creates <basename>.<outext>
+# NIST NBIS Fingerprint Matching Server - OPTIMIZED VERSION
+# ✨ Features:
+# - Parallel batch processing using ThreadPoolExecutor
+# - Caching for repeated comparisons
+# - Early termination on high-confidence matches
+# - Optimized minutiae extraction
+# - Better error handling and logging
 # """
 
 # from flask import Flask, request, jsonify
@@ -14,9 +21,19 @@
 # from pathlib import Path
 # import shutil
 # import sys
+# from concurrent.futures import ThreadPoolExecutor, as_completed
+# import time
+# import hashlib
+# from functools import lru_cache
 
 # app = Flask(__name__)
 # CORS(app)
+
+# # Configuration
+# MAX_WORKERS = 8  # Number of parallel threads
+# MATCH_THRESHOLD = 40
+# HIGH_CONFIDENCE_THRESHOLD = 100
+# EARLY_TERMINATION_SCORE = 200  # Stop searching if we find a match this good
 
 # # NBIS executables paths
 # def find_nbis_tools():
@@ -58,15 +75,16 @@
 # MINDTCT, BOZORTH3, CWSQ = find_nbis_tools()
 
 # print("=" * 60)
-# print("🔍 NBIS Tool Detection")
+# print("🚀 OPTIMIZED NBIS Fingerprint Server")
 # print("=" * 60)
 # print(f"MINDTCT: {MINDTCT} ({'✅' if MINDTCT and os.path.exists(MINDTCT) else '❌'})")
 # print(f"BOZORTH3: {BOZORTH3} ({'✅' if BOZORTH3 and os.path.exists(BOZORTH3) else '❌'})")
 # print(f"CWSQ: {CWSQ} ({'✅' if CWSQ and os.path.exists(CWSQ) else '❌'})")
+# print(f"Max Workers: {MAX_WORKERS}")
 # print("=" * 60)
 
-# class NBISMatcher:
-#     """NIST NBIS-based fingerprint matcher"""
+# class OptimizedNBISMatcher:
+#     """Optimized NIST NBIS-based fingerprint matcher with parallel processing"""
     
 #     def __init__(self):
 #         self.temp_dir = Path(tempfile.gettempdir()) / "nbis_fingerprints"
@@ -80,21 +98,34 @@
 #         if not CWSQ or not os.path.exists(CWSQ):
 #             raise RuntimeError("CWSQ not found")
         
-#     def extract_minutiae(self, base64_image, file_id):
+#         # Cache for minutiae extraction (stores hash -> xyt_file_path)
+#         self.minutiae_cache = {}
+        
+#     def get_image_hash(self, base64_image):
+#         """Generate hash for caching"""
+#         return hashlib.md5(base64_image.encode()).hexdigest()
+    
+#     def extract_minutiae(self, base64_image, file_id, use_cache=True):
 #         """
 #         Extract minutiae from fingerprint image using MINDTCT
 #         Returns: Path to .xyt minutiae file and minutiae count
 #         """
 #         try:
+#             # Check cache first
+#             if use_cache:
+#                 img_hash = self.get_image_hash(base64_image)
+#                 if img_hash in self.minutiae_cache:
+#                     cached_xyt, cached_count = self.minutiae_cache[img_hash]
+#                     if Path(cached_xyt).exists():
+#                         print(f"💾 Cache hit for {file_id}")
+#                         return cached_xyt, cached_count
+            
 #             # Decode base64 to image
 #             image_data = base64.b64decode(base64_image)
             
-#             # Create temporary files with proper naming
+#             # Create temporary files
 #             png_file = self.temp_dir / f"{file_id}.png"
 #             raw_file = self.temp_dir / f"{file_id}.raw"
-#             # CWSQ creates <basename>.<outext>, so if we pass "file_id" as input,
-#             # it will create "file_id.wsq" in the current working directory
-#             # We need to use full path without extension
 #             base_name = self.temp_dir / file_id
 #             wsq_file = self.temp_dir / f"{file_id}.wsq"
 #             xyt_file = self.temp_dir / f"{file_id}.xyt"
@@ -111,19 +142,15 @@
 #             # Save as raw grayscale
 #             img_array.tofile(raw_file)
             
-#             # ⭐ FIXED: CWSQ creates <input_basename>.<outext>
-#             # So: cwsq 2.25 wsq /path/to/file.raw creates /path/to/file.wsq
-#             # The output extension replaces the input extension
+#             # CWSQ compression
 #             cwsq_command = [
 #                 CWSQ,
-#                 "2.25",           # Bitrate (5:1 compression ratio)
-#                 "wsq",            # Output extension (replaces .raw with .wsq)
-#                 str(raw_file),    # Input file path
-#                 "-raw_in",        # Flag indicating raw input format
-#                 f"{width},{height},8,500"  # width,height,depth,ppi
+#                 "2.25",
+#                 "wsq",
+#                 str(raw_file),
+#                 "-raw_in",
+#                 f"{width},{height},8,500"
 #             ]
-            
-#             print(f"🔧 Running CWSQ: {' '.join(cwsq_command)}")
             
 #             cwsq_result = subprocess.run(
 #                 cwsq_command,
@@ -133,42 +160,26 @@
 #             )
             
 #             if cwsq_result.returncode != 0:
-#                 print(f"❌ CWSQ stderr: {cwsq_result.stderr}")
-#                 print(f"❌ CWSQ stdout: {cwsq_result.stdout}")
 #                 raise Exception(f"CWSQ failed: {cwsq_result.stderr}")
             
-#             # CWSQ replaces the extension: file.raw -> file.wsq
-#             # So the output should be at the same path with .wsq extension
 #             if not wsq_file.exists():
-#                 # Check if it was created in current directory
 #                 alt_wsq = Path(f"{file_id}.wsq")
 #                 if alt_wsq.exists():
 #                     shutil.move(str(alt_wsq), str(wsq_file))
 #                 else:
-#                     print(f"❌ WSQ file not found at: {wsq_file}")
-#                     print(f"❌ Also checked: {alt_wsq}")
-#                     print(f"📂 Directory contents: {list(self.temp_dir.glob('*'))}")
-#                     raise Exception(f"WSQ file not created")
-            
-#             print(f"✅ CWSQ completed, created: {wsq_file}")
+#                     raise Exception("WSQ file not created")
             
 #             # Extract minutiae using MINDTCT
-#             print(f"🔧 Running MINDTCT...")
 #             mindtct_result = subprocess.run([
 #                 MINDTCT,
 #                 str(wsq_file),
-#                 str(base_name)  # Output prefix (will create file_id.xyt)
+#                 str(base_name)
 #             ], capture_output=True, text=True, timeout=30)
             
 #             if mindtct_result.returncode != 0:
-#                 print(f"❌ MINDTCT stderr: {mindtct_result.stderr}")
-#                 print(f"❌ MINDTCT stdout: {mindtct_result.stdout}")
 #                 raise Exception(f"MINDTCT failed: {mindtct_result.stderr}")
             
-#             # Check if .xyt file was created
 #             if not xyt_file.exists():
-#                 print(f"❌ XYT file not found at: {xyt_file}")
-#                 print(f"📂 Directory contents: {list(self.temp_dir.glob('*'))}")
 #                 raise Exception("Minutiae extraction failed - no .xyt file generated")
             
 #             # Read minutiae count
@@ -176,20 +187,20 @@
 #                 lines = f.readlines()
 #                 minutiae_count = len([l for l in lines if not l.startswith('#')])
             
-#             print(f"✅ Extracted {minutiae_count} minutiae points from {file_id}")
+#             # Cache the result
+#             if use_cache:
+#                 img_hash = self.get_image_hash(base64_image)
+#                 self.minutiae_cache[img_hash] = (str(xyt_file), minutiae_count)
             
-#             # Cleanup temporary files
+#             # Cleanup intermediate files
 #             png_file.unlink(missing_ok=True)
 #             raw_file.unlink(missing_ok=True)
 #             wsq_file.unlink(missing_ok=True)
             
 #             return str(xyt_file), minutiae_count
             
-#         except subprocess.CalledProcessError as e:
-#             print(f"❌ NBIS Error: {e.stderr}")
-#             raise Exception(f"Minutiae extraction failed: {e.stderr}")
 #         except Exception as e:
-#             print(f"❌ Error: {str(e)}")
+#             print(f"❌ Minutiae extraction error for {file_id}: {str(e)}")
 #             raise
     
 #     def match_fingerprints(self, xyt_file1, xyt_file2):
@@ -202,16 +213,22 @@
 #             ], check=True, capture_output=True, text=True, timeout=30)
             
 #             score = int(result.stdout.strip())
-#             print(f"🔍 BOZORTH3 Score: {score}")
-            
 #             return score
             
-#         except subprocess.CalledProcessError as e:
-#             print(f"❌ Matching Error: {e.stderr}")
-#             raise Exception(f"Fingerprint matching failed: {e.stderr}")
 #         except Exception as e:
-#             print(f"❌ Error: {str(e)}")
+#             print(f"❌ Matching error: {str(e)}")
 #             raise
+    
+#     def calculate_confidence(self, score):
+#         """Calculate confidence percentage from BOZORTH3 score"""
+#         if score >= HIGH_CONFIDENCE_THRESHOLD:
+#             confidence = min(100, 80 + (score - HIGH_CONFIDENCE_THRESHOLD) / 5)
+#         elif score >= MATCH_THRESHOLD:
+#             confidence = 60 + (score - MATCH_THRESHOLD) / (HIGH_CONFIDENCE_THRESHOLD - MATCH_THRESHOLD) * 20
+#         else:
+#             confidence = (score / MATCH_THRESHOLD) * 60
+        
+#         return round(confidence, 1)
     
 #     def cleanup(self, file_id):
 #         """Remove temporary files"""
@@ -219,16 +236,20 @@
 #         for pattern in patterns:
 #             file = self.temp_dir / f"{file_id}{pattern}"
 #             file.unlink(missing_ok=True)
+    
+#     def cleanup_cache(self):
+#         """Clear minutiae cache"""
+#         self.minutiae_cache.clear()
 
 # # Initialize matcher
 # try:
-#     matcher = NBISMatcher()
+#     matcher = OptimizedNBISMatcher()
 #     NBIS_AVAILABLE = True
-#     print("✅ NBISMatcher initialized successfully")
+#     print("✅ OptimizedNBISMatcher initialized successfully")
 # except Exception as e:
 #     matcher = None
 #     NBIS_AVAILABLE = False
-#     print(f"❌ NBISMatcher initialization failed: {e}")
+#     print(f"❌ OptimizedNBISMatcher initialization failed: {e}")
 
 # @app.route('/health', methods=['GET'])
 # def health():
@@ -240,9 +261,11 @@
     
 #     return jsonify({
 #         'status': 'healthy',
-#         'service': 'NIST NBIS Fingerprint Matcher',
+#         'service': 'Optimized NIST NBIS Fingerprint Matcher',
 #         'nbis_available': nbis_available,
 #         'matcher_initialized': NBIS_AVAILABLE,
+#         'max_workers': MAX_WORKERS,
+#         'cache_size': len(matcher.minutiae_cache) if matcher else 0,
 #         'nbis_details': {
 #             'mindtct_path': MINDTCT,
 #             'mindtct_exists': mindtct_exists,
@@ -252,38 +275,6 @@
 #             'cwsq_exists': cwsq_exists
 #         }
 #     })
-
-# @app.route('/extract', methods=['POST'])
-# def extract_minutiae():
-#     """Extract minutiae from a single fingerprint"""
-#     if not NBIS_AVAILABLE:
-#         return jsonify({'success': False, 'error': 'NBIS tools not available'}), 503
-    
-#     try:
-#         data = request.json
-        
-#         if not data or 'image' not in data:
-#             return jsonify({'success': False, 'error': 'Missing image data'}), 400
-        
-#         image = data['image']
-#         file_id = data.get('id', 'temp')
-        
-#         xyt_file, minutiae_count = matcher.extract_minutiae(image, file_id)
-        
-#         with open(xyt_file, 'r') as f:
-#             xyt_data = f.read()
-        
-#         matcher.cleanup(file_id)
-        
-#         return jsonify({
-#             'success': True,
-#             'minutiae_count': minutiae_count,
-#             'xyt_data': xyt_data,
-#             'message': f'Extracted {minutiae_count} minutiae points'
-#         })
-        
-#     except Exception as e:
-#         return jsonify({'success': False, 'error': str(e)}), 500
 
 # @app.route('/compare', methods=['POST'])
 # def compare_fingerprints():
@@ -298,39 +289,25 @@
 #             return jsonify({'success': False, 'error': 'Missing image data'}), 400
         
 #         print("\n🔍 === NBIS FINGERPRINT COMPARISON ===")
+#         start_time = time.time()
         
-#         print("📊 Extracting minutiae from image 1...")
+#         # Extract minutiae
 #         xyt_file1, count1 = matcher.extract_minutiae(data['image1'], 'temp1')
-        
-#         print("📊 Extracting minutiae from image 2...")
 #         xyt_file2, count2 = matcher.extract_minutiae(data['image2'], 'temp2')
         
-#         print(f"✅ Image 1: {count1} minutiae points")
-#         print(f"✅ Image 2: {count2} minutiae points")
+#         print(f"✅ Image 1: {count1} minutiae | Image 2: {count2} minutiae")
         
-#         print("🔄 Running BOZORTH3 matching...")
+#         # Match
 #         score = matcher.match_fingerprints(xyt_file1, xyt_file2)
-        
-#         MATCH_THRESHOLD = 40
-#         HIGH_CONFIDENCE_THRESHOLD = 100
-        
+#         confidence = matcher.calculate_confidence(score)
 #         matched = score >= MATCH_THRESHOLD
         
-#         if score >= HIGH_CONFIDENCE_THRESHOLD:
-#             confidence = min(100, 80 + (score - HIGH_CONFIDENCE_THRESHOLD) / 5)
-#         elif score >= MATCH_THRESHOLD:
-#             confidence = 60 + (score - MATCH_THRESHOLD) / (HIGH_CONFIDENCE_THRESHOLD - MATCH_THRESHOLD) * 20
-#         else:
-#             confidence = (score / MATCH_THRESHOLD) * 60
+#         elapsed = time.time() - start_time
         
-#         confidence = round(confidence, 1)
+#         print(f"🎯 {'✅ MATCH' if matched else '❌ NO MATCH'} | Score: {score} | Confidence: {confidence}% | Time: {elapsed:.2f}s")
+#         print("=" * 60 + "\n")
         
-#         result_emoji = "✅ MATCH" if matched else "❌ NO MATCH"
-#         print(f"🎯 Result: {result_emoji}")
-#         print(f"📊 BOZORTH3 Score: {score}")
-#         print(f"🎯 Confidence: {confidence}%")
-#         print("=====================================\n")
-        
+#         # Cleanup
 #         matcher.cleanup('temp1')
 #         matcher.cleanup('temp2')
         
@@ -341,6 +318,7 @@
 #             'confidence': confidence,
 #             'threshold': MATCH_THRESHOLD,
 #             'method': 'NIST_NBIS_BOZORTH3',
+#             'processing_time': round(elapsed, 2),
 #             'details': {
 #                 'minutiae_count_1': count1,
 #                 'minutiae_count_2': count2,
@@ -354,7 +332,9 @@
 
 # @app.route('/batch-compare', methods=['POST'])
 # def batch_compare():
-#     """Compare one fingerprint against multiple stored fingerprints"""
+#     """
+#     🚀 OPTIMIZED: Compare one fingerprint against multiple stored fingerprints in parallel
+#     """
 #     if not NBIS_AVAILABLE:
 #         return jsonify({'success': False, 'error': 'NBIS tools not available'}), 503
     
@@ -367,60 +347,168 @@
 #         query_image = data['query_image']
 #         database = data['database']
         
-#         print(f"\n🔍 === BATCH COMPARISON: 1 vs {len(database)} ===")
+#         print(f"\n🚀 === PARALLEL BATCH COMPARISON: 1 vs {len(database)} ===")
+#         start_time = time.time()
         
-#         print("📊 Extracting minutiae from query image...")
-#         xyt_query, count_query = matcher.extract_minutiae(query_image, 'query')
-#         print(f"✅ Query: {count_query} minutiae points")
+#         # ⭐ STEP 1: Extract query minutiae ONCE (not in loop)
+#         print("📊 Extracting query minutiae...")
+#         extraction_start = time.time()
+#         xyt_query, count_query = matcher.extract_minutiae(query_image, 'query', use_cache=True)
+#         extraction_time = time.time() - extraction_start
+#         print(f"✅ Query: {count_query} minutiae ({extraction_time:.2f}s)")
+        
+#         # ⭐ STEP 2: Define comparison function for parallel execution
+#         def compare_single(db_entry, index):
+#             """Compare query against a single database entry"""
+#             try:
+#                 file_id = f'db_{index}'
+                
+#                 # Extract minutiae from database entry
+#                 xyt_db, count_db = matcher.extract_minutiae(
+#                     db_entry['image'], 
+#                     file_id, 
+#                     use_cache=True
+#                 )
+                
+#                 # Match
+#                 score = matcher.match_fingerprints(xyt_query, xyt_db)
+#                 confidence = matcher.calculate_confidence(score)
+#                 matched = score >= MATCH_THRESHOLD
+                
+#                 # Cleanup
+#                 matcher.cleanup(file_id)
+                
+#                 result = {
+#                     'id': db_entry.get('id'),
+#                     'studentId': db_entry.get('studentId'),
+#                     'matricNumber': db_entry.get('matricNumber'),
+#                     'studentName': db_entry.get('studentName'),
+#                     'fingerName': db_entry.get('fingerName'),
+#                     'score': score,
+#                     'confidence': confidence,
+#                     'matched': matched,
+#                     'minutiae_count': count_db,
+#                     'index': index
+#                 }
+                
+#                 # Log progress
+#                 if matched:
+#                     print(f"  ✅ Entry {index+1}/{len(database)}: MATCH (score: {score})")
+                
+#                 return result
+                
+#             except Exception as e:
+#                 print(f"  ❌ Entry {index+1} error: {str(e)}")
+#                 return None
+        
+#         # ⭐ STEP 3: Parallel processing with ThreadPoolExecutor
+#         print(f"🔄 Starting parallel comparison with {MAX_WORKERS} workers...")
+#         comparison_start = time.time()
         
 #         matches = []
 #         best_match = None
 #         highest_score = 0
+#         completed_count = 0
         
-#         for i, db_entry in enumerate(database):
-#             print(f"🔄 Comparing with database entry {i+1}/{len(database)}...")
-            
-#             xyt_db, count_db = matcher.extract_minutiae(db_entry['image'], f'db_{i}')
-            
-#             score = matcher.match_fingerprints(xyt_query, xyt_db)
-            
-#             matched = score >= 40
-#             if score >= 100:
-#                 confidence = min(100, 80 + (score - 100) / 5)
-#             elif score >= 40:
-#                 confidence = 60 + (score - 40) / 60 * 20
-#             else:
-#                 confidence = (score / 40) * 60
-            
-#             match_result = {
-#                 'id': db_entry.get('id'),
-#                 'score': score,
-#                 'confidence': round(confidence, 1),
-#                 'matched': matched,
-#                 'minutiae_count': count_db
+#         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+#             # Submit all tasks
+#             future_to_index = {
+#                 executor.submit(compare_single, db_entry, i): i 
+#                 for i, db_entry in enumerate(database)
 #             }
             
-#             matches.append(match_result)
+#             # ⭐ EARLY TERMINATION: Stop if we find excellent match
+#             early_termination = False
             
-#             if matched and score > highest_score:
-#                 highest_score = score
-#                 best_match = match_result
-            
-#             matcher.cleanup(f'db_{i}')
+#             # Process completed tasks as they finish
+#             for future in as_completed(future_to_index):
+#                 result = future.result()
+#                 completed_count += 1
+                
+#                 if result:
+#                     matches.append(result)
+                    
+#                     # Track best match
+#                     if result['matched'] and result['score'] > highest_score:
+#                         highest_score = result['score']
+#                         best_match = result
+                        
+#                         # Early termination on excellent match
+#                         if result['score'] >= EARLY_TERMINATION_SCORE:
+#                             print(f"🎯 EXCELLENT MATCH FOUND (score: {result['score']}) - Early termination")
+#                             early_termination = True
+#                             # Cancel remaining tasks
+#                             for f in future_to_index:
+#                                 f.cancel()
+#                             break
+                
+#                 # Progress update every 20%
+#                 if completed_count % max(1, len(database) // 5) == 0:
+#                     progress = (completed_count / len(database)) * 100
+#                     print(f"  📊 Progress: {completed_count}/{len(database)} ({progress:.0f}%)")
         
+#         comparison_time = time.time() - comparison_start
+#         total_time = time.time() - start_time
+        
+#         # Cleanup
 #         matcher.cleanup('query')
+        
+#         # Sort matches by score
+#         matches.sort(key=lambda x: x['score'], reverse=True)
         
 #         print(f"✅ Comparison complete")
 #         print(f"🎯 Best match score: {highest_score}")
-#         print("=====================================\n")
+#         print(f"⚡ Total time: {total_time:.2f}s")
+#         print(f"   - Query extraction: {extraction_time:.2f}s")
+#         print(f"   - Parallel comparison: {comparison_time:.2f}s")
+#         print(f"   - Throughput: {len(database)/comparison_time:.1f} comparisons/sec")
+#         if early_termination:
+#             print(f"🚀 Early termination saved {len(database) - completed_count} comparisons")
+#         print("=" * 60 + "\n")
         
 #         return jsonify({
 #             'success': True,
-#             'matches': matches,
+#             'matches': matches[:10],  # Return top 10 matches
 #             'best_match': best_match,
-#             'total_compared': len(database),
-#             'query_minutiae': count_query
+#             'total_compared': completed_count,
+#             'query_minutiae': count_query,
+#             'early_termination': early_termination,
+#             'performance': {
+#                 'total_time': round(total_time, 2),
+#                 'extraction_time': round(extraction_time, 2),
+#                 'comparison_time': round(comparison_time, 2),
+#                 'throughput': round(len(database)/comparison_time, 1)
+#             }
 #         })
+        
+#     except Exception as e:
+#         print(f"❌ Error: {str(e)}")
+#         return jsonify({'success': False, 'error': str(e)}), 500
+
+# @app.route('/clear-cache', methods=['POST'])
+# def clear_cache():
+#     """Clear minutiae cache"""
+#     if not NBIS_AVAILABLE:
+#         return jsonify({'success': False, 'error': 'NBIS tools not available'}), 503
+    
+#     cache_size = len(matcher.minutiae_cache)
+#     matcher.cleanup_cache()
+    
+#     return jsonify({
+#         'success': True,
+#         'message': f'Cleared {cache_size} cached entries'
+#     })
+
+# if __name__ == '__main__':
+#     # Use production-ready server
+#     port = int(os.environ.get('PORT', 5000))
+#     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+# #     except Exception as e:
+# #         print(f"❌ Error: {str(e)}")
+# #         return jsonify({'success': False, 'error': str(e)}), 500
+
+# # if __name__ == '__main__':
+# #     app.run(host='0.0.0.0', port=5000, debug=True)
 
 
 
@@ -432,6 +520,7 @@ NIST NBIS Fingerprint Matching Server - OPTIMIZED VERSION
 - Early termination on high-confidence matches
 - Optimized minutiae extraction
 - Better error handling and logging
+- HIGHER threshold for duplicate detection (different from authentication)
 """
 
 from flask import Flask, request, jsonify
@@ -455,9 +544,12 @@ CORS(app)
 
 # Configuration
 MAX_WORKERS = 8  # Number of parallel threads
-MATCH_THRESHOLD = 40
+
+# ⭐ CRITICAL: Different thresholds for different use cases
+AUTHENTICATION_THRESHOLD = 40      # Lower threshold for verifying same finger (login/attendance)
+DUPLICATE_DETECTION_THRESHOLD = 80 # Higher threshold to avoid false positives (enrollment)
 HIGH_CONFIDENCE_THRESHOLD = 100
-EARLY_TERMINATION_SCORE = 200  # Stop searching if we find a match this good
+EARLY_TERMINATION_SCORE = 200
 
 # NBIS executables paths
 def find_nbis_tools():
@@ -505,6 +597,8 @@ print(f"MINDTCT: {MINDTCT} ({'✅' if MINDTCT and os.path.exists(MINDTCT) else '
 print(f"BOZORTH3: {BOZORTH3} ({'✅' if BOZORTH3 and os.path.exists(BOZORTH3) else '❌'})")
 print(f"CWSQ: {CWSQ} ({'✅' if CWSQ and os.path.exists(CWSQ) else '❌'})")
 print(f"Max Workers: {MAX_WORKERS}")
+print(f"Authentication Threshold: {AUTHENTICATION_THRESHOLD}")
+print(f"Duplicate Detection Threshold: {DUPLICATE_DETECTION_THRESHOLD}")
 print("=" * 60)
 
 class OptimizedNBISMatcher:
@@ -647,10 +741,10 @@ class OptimizedNBISMatcher:
         """Calculate confidence percentage from BOZORTH3 score"""
         if score >= HIGH_CONFIDENCE_THRESHOLD:
             confidence = min(100, 80 + (score - HIGH_CONFIDENCE_THRESHOLD) / 5)
-        elif score >= MATCH_THRESHOLD:
-            confidence = 60 + (score - MATCH_THRESHOLD) / (HIGH_CONFIDENCE_THRESHOLD - MATCH_THRESHOLD) * 20
+        elif score >= AUTHENTICATION_THRESHOLD:
+            confidence = 60 + (score - AUTHENTICATION_THRESHOLD) / (HIGH_CONFIDENCE_THRESHOLD - AUTHENTICATION_THRESHOLD) * 20
         else:
-            confidence = (score / MATCH_THRESHOLD) * 60
+            confidence = (score / AUTHENTICATION_THRESHOLD) * 60
         
         return round(confidence, 1)
     
@@ -690,6 +784,11 @@ def health():
         'matcher_initialized': NBIS_AVAILABLE,
         'max_workers': MAX_WORKERS,
         'cache_size': len(matcher.minutiae_cache) if matcher else 0,
+        'thresholds': {
+            'authentication': AUTHENTICATION_THRESHOLD,
+            'duplicate_detection': DUPLICATE_DETECTION_THRESHOLD,
+            'high_confidence': HIGH_CONFIDENCE_THRESHOLD
+        },
         'nbis_details': {
             'mindtct_path': MINDTCT,
             'mindtct_exists': mindtct_exists,
@@ -702,7 +801,10 @@ def health():
 
 @app.route('/compare', methods=['POST'])
 def compare_fingerprints():
-    """Compare two fingerprints"""
+    """
+    Compare two fingerprints - uses AUTHENTICATION_THRESHOLD
+    Used for: Login, attendance verification (verifying SAME finger)
+    """
     if not NBIS_AVAILABLE:
         return jsonify({'success': False, 'error': 'NBIS tools not available'}), 503
     
@@ -712,7 +814,7 @@ def compare_fingerprints():
         if not data or 'image1' not in data or 'image2' not in data:
             return jsonify({'success': False, 'error': 'Missing image data'}), 400
         
-        print("\n🔍 === NBIS FINGERPRINT COMPARISON ===")
+        print("\n🔍 === NBIS AUTHENTICATION COMPARISON ===")
         start_time = time.time()
         
         # Extract minutiae
@@ -724,11 +826,12 @@ def compare_fingerprints():
         # Match
         score = matcher.match_fingerprints(xyt_file1, xyt_file2)
         confidence = matcher.calculate_confidence(score)
-        matched = score >= MATCH_THRESHOLD
+        matched = score >= AUTHENTICATION_THRESHOLD  # ⭐ Use auth threshold
         
         elapsed = time.time() - start_time
         
         print(f"🎯 {'✅ MATCH' if matched else '❌ NO MATCH'} | Score: {score} | Confidence: {confidence}% | Time: {elapsed:.2f}s")
+        print(f"📊 Threshold: {AUTHENTICATION_THRESHOLD} (Authentication)")
         print("=" * 60 + "\n")
         
         # Cleanup
@@ -740,7 +843,7 @@ def compare_fingerprints():
             'matched': matched,
             'score': score,
             'confidence': confidence,
-            'threshold': MATCH_THRESHOLD,
+            'threshold': AUTHENTICATION_THRESHOLD,
             'method': 'NIST_NBIS_BOZORTH3',
             'processing_time': round(elapsed, 2),
             'details': {
@@ -757,7 +860,9 @@ def compare_fingerprints():
 @app.route('/batch-compare', methods=['POST'])
 def batch_compare():
     """
-    🚀 OPTIMIZED: Compare one fingerprint against multiple stored fingerprints in parallel
+    🚀 OPTIMIZED: Compare one fingerprint against multiple stored fingerprints
+    ⭐ CRITICAL: Uses DUPLICATE_DETECTION_THRESHOLD (higher threshold)
+    Used for: Enrollment duplicate detection (checking if different fingers)
     """
     if not NBIS_AVAILABLE:
         return jsonify({'success': False, 'error': 'NBIS tools not available'}), 503
@@ -771,7 +876,14 @@ def batch_compare():
         query_image = data['query_image']
         database = data['database']
         
-        print(f"\n🚀 === PARALLEL BATCH COMPARISON: 1 vs {len(database)} ===")
+        # ⭐ Determine if this is duplicate detection or authentication
+        is_duplicate_check = data.get('is_duplicate_check', True)
+        threshold = DUPLICATE_DETECTION_THRESHOLD if is_duplicate_check else AUTHENTICATION_THRESHOLD
+        
+        print(f"\n🚀 === PARALLEL BATCH COMPARISON ===")
+        print(f"📊 Mode: {'DUPLICATE DETECTION' if is_duplicate_check else 'AUTHENTICATION'}")
+        print(f"📊 Threshold: {threshold}")
+        print(f"📊 Comparing: 1 vs {len(database)}")
         start_time = time.time()
         
         # ⭐ STEP 1: Extract query minutiae ONCE (not in loop)
@@ -797,7 +909,7 @@ def batch_compare():
                 # Match
                 score = matcher.match_fingerprints(xyt_query, xyt_db)
                 confidence = matcher.calculate_confidence(score)
-                matched = score >= MATCH_THRESHOLD
+                matched = score >= threshold  # ⭐ Use appropriate threshold
                 
                 # Cleanup
                 matcher.cleanup(file_id)
@@ -817,7 +929,7 @@ def batch_compare():
                 
                 # Log progress
                 if matched:
-                    print(f"  ✅ Entry {index+1}/{len(database)}: MATCH (score: {score})")
+                    print(f"  ✅ Entry {index+1}/{len(database)}: MATCH (score: {score}, threshold: {threshold})")
                 
                 return result
                 
@@ -881,7 +993,7 @@ def batch_compare():
         matches.sort(key=lambda x: x['score'], reverse=True)
         
         print(f"✅ Comparison complete")
-        print(f"🎯 Best match score: {highest_score}")
+        print(f"🎯 Best match score: {highest_score} (threshold: {threshold})")
         print(f"⚡ Total time: {total_time:.2f}s")
         print(f"   - Query extraction: {extraction_time:.2f}s")
         print(f"   - Parallel comparison: {comparison_time:.2f}s")
@@ -896,6 +1008,8 @@ def batch_compare():
             'best_match': best_match,
             'total_compared': completed_count,
             'query_minutiae': count_query,
+            'threshold_used': threshold,
+            'is_duplicate_check': is_duplicate_check,
             'early_termination': early_termination,
             'performance': {
                 'total_time': round(total_time, 2),
@@ -927,9 +1041,3 @@ if __name__ == '__main__':
     # Use production-ready server
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
-#     except Exception as e:
-#         print(f"❌ Error: {str(e)}")
-#         return jsonify({'success': False, 'error': str(e)}), 500
-
-# if __name__ == '__main__':
-#     app.run(host='0.0.0.0', port=5000, debug=True)
