@@ -525,8 +525,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 app = Flask(__name__)
 CORS(app)
 
-# Configuration
-NBIS_PATH = Path("/opt/NBIS/Main/bin")
+# Configuration - ⭐ FIXED PATH to match Dockerfile
+NBIS_PATH = Path("/usr/local/nbis/bin")  # Changed from /opt/NBIS/Main/bin
 TEMP_DIR = Path("/tmp/nbis_temp")
 TEMP_DIR.mkdir(exist_ok=True)
 
@@ -825,6 +825,7 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'nbis_available': NBIS_AVAILABLE,
+        'nbis_path': str(NBIS_PATH),  # ⭐ Added for debugging
         'cache_size': len(minutiae_cache)
     })
 
@@ -842,9 +843,10 @@ if __name__ == '__main__':
     print("🚀 NBIS FINGERPRINT SERVER")
     print("=" * 60)
     print(f"✅ NBIS Available: {NBIS_AVAILABLE}")
+    print(f"📁 NBIS Path: {NBIS_PATH}")
     print(f"🎚️  Authentication Threshold: {AUTHENTICATION_THRESHOLD}")
     print(f"🎚️  Duplicate Detection Threshold: {DUPLICATE_DETECTION_THRESHOLD}")
     print(f"⚡ Worker Threads: {MAX_WORKERS}")
     print("=" * 60 + "\n")
     
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
